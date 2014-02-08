@@ -1,0 +1,13 @@
+device(:cdc_device) {
+  idVendor 0x2323
+  idProduct 0x2c
+  iManufacturer "0x2c.org"
+  iProduct "USB Label Printer"
+
+  config {
+    initfun :init_serial
+
+    cdc {
+    }
+  }
+}

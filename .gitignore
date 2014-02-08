@@ -1,0 +1,9 @@
+*.bin
+*.ld
+*.d
+*.o
+*.desc.[ch]
+*.elf
+*.ld-template
+*.linkdep
+*.map

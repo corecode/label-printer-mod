@@ -34,6 +34,7 @@ static enum input_state input_state = IDLE;
 
 static uint8_t input_buffer[512];
 static size_t input_len = 0;
+static int input_full = 0;
 
 static uint16_t print_lines = 0;
 static uint16_t printed_lines = 0;
@@ -78,10 +79,14 @@ disable_pins(void)
 {
         pin_mode(PIN_CLK, PIN_MODE_MUX_ANALOG);
         pin_mode(PIN_DATA, PIN_MODE_MUX_ANALOG);
+        gpio_write(PIN_MOTOR, GPIO_LOW);
         gpio_dir(PIN_MOTOR, GPIO_DISABLE);
+        gpio_write(PIN_nSTROBE, GPIO_HIGH);
         gpio_dir(PIN_nSTROBE, GPIO_DISABLE);
+        gpio_write(PIN_nLATCH, GPIO_HIGH);
         gpio_dir(PIN_nLATCH, GPIO_DISABLE);
         gpio_dir(PIN_nRESET, GPIO_DISABLE);
+        onboard_led(ONBOARD_LED_OFF);
 }
 
 static void
@@ -93,14 +98,14 @@ setup_print(uint16_t lines)
 }
 
 static void
-feed_done_cb(enum pit_id id)
+cycle_done_cb(enum pit_id id)
 {
-        printed_lines++;
         if (printed_lines == print_lines) {
+                pit_stop(PIT_0);
                 disable_pins();
                 input_state = IDLE;
         } else {
-                pit_start(PIT_0, us_to_cycles(strobe_on_us), strobe_done_cb);
+                pit_start(PIT_1, us_to_cycles(strobe_on_us), strobe_done_cb);
                 gpio_write(PIN_nSTROBE, GPIO_LOW);
         }
 
@@ -120,11 +125,22 @@ latch_data(void)
 static void
 strobe_done_cb(enum pit_id id)
 {
-        pit_start(PIT_0, us_to_cycles(strobe_off_us), feed_done_cb);
+        pit_stop(PIT_1);
         gpio_write(PIN_nSTROBE, GPIO_HIGH);
 
         latch_data();
         queue_line();
+}
+
+static void
+read_more(void)
+{
+        if (sizeof(input_buffer) - input_len >= CDC_RX_SIZE) {
+                input_full = 0;
+                cdc_read_more(&cdc);
+        } else {
+                input_full = 1;
+        }
 }
 
 static void
@@ -133,15 +149,19 @@ line_sent_cb(void *cbdata)
         crit_enter();
         input_len -= line_size;
         memcpy(input_buffer, input_buffer + line_size, input_len);
+        if (input_full)
+                read_more();
         crit_exit();
 
         /* first line? -> switch on motor */
         if (printed_lines == 0) {
                 latch_data();
-                pit_start(PIT_0, us_to_cycles(strobe_on_us), strobe_done_cb);
+                pit_start(PIT_0, us_to_cycles(strobe_on_us + strobe_off_us), cycle_done_cb);
+                pit_start(PIT_1, us_to_cycles(strobe_on_us), strobe_done_cb);
                 gpio_write(PIN_nSTROBE, GPIO_LOW);
                 gpio_write(PIN_MOTOR, GPIO_HIGH);
         }
+        printed_lines++;
 }
 
 static void
@@ -149,8 +169,12 @@ queue_line(void)
 {
         static struct spi_ctx spi;
 
-        if (input_len < line_size && printed_lines < print_lines) {
+        if (input_state != PRINTING)
+                return;
+
+        if (input_len < line_size) {
                 /* buffer underrun */
+                pit_stop(PIT_0);
                 disable_pins();
                 printf("U%d\n", printed_lines);
                 input_state = IDLE;
@@ -167,23 +191,30 @@ static void
 start_print(void)
 {
         /* buffer some more? */
-        if (input_state == SPOOLING &&
-            input_len < buffer_lines * line_size &&
+        if (input_len < buffer_lines * line_size &&
             input_len < print_lines * line_size)
                 return;
 
+        onboard_led(ONBOARD_LED_ON);
         input_state = PRINTING;
         queue_line();
 }
 
 static void
-process_input(void)
+serial_in(uint8_t *data, size_t len)
 {
-        uint8_t *c = input_buffer;
+        size_t copylen = len;
 
+        if (sizeof(input_buffer) - input_len < copylen)
+                copylen = sizeof(input_buffer) - input_len;
+
+        memcpy(input_buffer + input_len, data, copylen);
+        input_len += copylen;
+
+        uint8_t *c = input_buffer;
         switch (input_state) {
         case IDLE:
-                for (; c < input_buffer + sizeof(input_buffer) - sizeof(struct print_header); ++c) {
+                for (; c < input_buffer + input_len - sizeof(struct print_header); ++c) {
                         struct print_header *h = (void *)c;
 
                         if (memcmp(h->magic, header_magic, sizeof(h->magic)) == 0) {
@@ -195,13 +226,17 @@ process_input(void)
                 }
                 /* FALLTHROUGH */
 
+
         case SPOOLING:
         case PRINTING:
-                memcpy(input_buffer, c, input_len - (c - input_buffer));
-                input_len -= c - input_buffer;
+                if (c > input_buffer) {
+                        memcpy(input_buffer, c, input_len - (c - input_buffer));
+                        input_len -= c - input_buffer;
+                }
 
-                if (sizeof(input_buffer) - input_len >= CDC_RX_SIZE)
-                        cdc_read_more(&cdc);
+                printf("%d\n", input_len);
+
+                read_more();
 
                 if (input_state == SPOOLING)
                         start_print();
@@ -210,28 +245,18 @@ process_input(void)
 }
 
 
-static void
-serial_in(uint8_t *data, size_t len)
-{
-        size_t copylen = len;
-
-        if (sizeof(input_buffer) - input_len < copylen)
-                copylen = sizeof(input_buffer) - input_len;
-
-        memcpy(input_buffer + input_len, data, copylen);
-        process_input();
-}
-
 void
 init_serial(int config)
 {
         cdc_init(serial_in, NULL, &cdc);
+        cdc_set_stdout(&cdc);
 }
 
 int
 main(void)
 {
         spi_init();
+        pit_init();
         usb_init(&cdc_device);
         sys_yield_for_frogs();
 }

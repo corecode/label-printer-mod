@@ -42,8 +42,8 @@ static uint16_t printed_lines = 0;
 static const int line_size = 8;
 static const int buffer_lines = 40;
 
-static const int strobe_on_us = 4000;   /* 4ms */
-static const int strobe_off_us = 10000; /* 10ms */
+static const int strobe_on_us = 3540;   /* 4ms */
+static const int strobe_off_us = 10400; /* 10ms */
 
 
 static uint32_t

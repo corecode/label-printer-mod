@@ -109,7 +109,7 @@ cycle_done_cb(enum pit_id id)
                 gpio_write(PIN_nSTROBE, GPIO_LOW);
         }
 
-        if (printed_lines % 1024 == 0 || printed_lines == print_lines)
+        if (printed_lines % 72 == 0 || printed_lines == print_lines)
                 printf("P%d\n", printed_lines);
 }
 
@@ -233,8 +233,6 @@ serial_in(uint8_t *data, size_t len)
                         memcpy(input_buffer, c, input_len - (c - input_buffer));
                         input_len -= c - input_buffer;
                 }
-
-                printf("%d\n", input_len);
 
                 read_more();
 

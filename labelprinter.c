@@ -8,6 +8,7 @@ enum {
         PIN_nLATCH = PIN_PTD3,
         PIN_nSTROBE = PIN_PTD4,
         PIN_MOTOR = PIN_PTD5,
+        PIN_VUSB_SENSE = PIN_PTD6,
 };
 
 static const char *header_magic = "PRT";
@@ -250,9 +251,52 @@ init_serial(int config)
         cdc_set_stdout(&cdc);
 }
 
+
+/* No voltage on VUSB -> go into VLLS0 */
+static void
+power_down_cb(void *cbdata)
+{
+        crit_enter();
+        disable_pins();
+
+        /* PTD6 is P15, which is wupe3 in wupe[3], and bit 7 in wuf2 */
+
+        /* clear old condition */
+        LLWU.wuf2 |= 1 << 7;
+        /* set up wakeup condition */
+        LLWU.wupe[3].wupe3 = LLWU_PE_RISING;
+
+        /* set up VLLS0 */
+        SMC.pmprot.avlls = 1;
+        SMC.pmctrl.stopm = STOPM_VLLS;
+        SMC.vllsctrl.porpo = 0;
+        SMC.vllsctrl.vllsm = VLLSM_VLLS0;
+
+        /* did it come back? */
+        if (gpio_read(PIN_VUSB_SENSE))
+                goto error;
+
+        /* set up deep sleep in wfi */
+        SCB.scr.sleepdeep = 1;
+
+        /* either we come back with stopa set, or we return via reset */
+        asm("wfi");
+
+error:
+        /* wut? something went wrong.  abort. */
+        SCB.scr.sleepdeep = 0;
+        sys_reset();
+}
+PIN_DEFINE_CALLBACK(PIN_PTD6, PIN_CHANGE_ZERO, power_down_cb, NULL);
+
 int
 main(void)
 {
+        /* return from VLLS0 */
+        gpio_dir(PIN_VUSB_SENSE, GPIO_INPUT);
+        PMC.regsc.ackiso = 1;
+
+        pin_change_init();
         spi_init();
         pit_init();
         usb_init(&cdc_device);

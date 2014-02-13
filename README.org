@@ -1,0 +1,2 @@
+MC HCK firmware for modding a Brother PT-1000 label printer to make
+it USB enabled.

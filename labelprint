@@ -1,0 +1,43 @@
+#!/usr/bin/env ruby
+
+require 'serialport'
+
+class LabelPrinter
+  def initialize(port)
+    @p = SerialPort.open(port)
+  end
+
+  def print(lines)
+    header = ["PRT", 0, lines.count].pack('a*cv')
+    data = lines.map do |l|
+      [l.map{|p| p && p != 0 ? "1" : "0"}.join+"0"*64].pack('B64')
+    end.join
+
+    @p.write(header + data)
+    while true
+      res = @p.readline
+      case res
+      when /^P(\d+)/
+        yield $1.to_i if block_given?
+        break if $1.to_i == lines.count
+      when /^U(\d+)/
+        raise RuntimeError, "print error in line #{$1.to_i}"
+      end
+    end
+  end
+end
+
+if $0 == __FILE__
+  testpattern = 200.times.map do |pos|
+    l = [0]*64
+    l[pos % 64] = 1
+    l
+  end
+
+  puts testpattern.map{|l| l.map(&:to_s).join}.join("\n")
+
+  p = LabelPrinter.new ARGV[0]
+  p.print(testpattern) { |l|
+    puts "line: #{l}"
+  }
+end

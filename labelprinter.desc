@@ -6,8 +6,12 @@ device(:cdc_device) {
 
   config {
     initfun :init_serial
+    suspendfun :suspend_sys
+    resumefun :resume_sys
 
     cdc {
+    }
+    dfu_app {
     }
   }
 }

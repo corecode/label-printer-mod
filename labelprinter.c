@@ -87,7 +87,7 @@ disable_pins(void)
         gpio_write(PIN_nLATCH, GPIO_HIGH);
         gpio_dir(PIN_nLATCH, GPIO_DISABLE);
         gpio_dir(PIN_nRESET, GPIO_DISABLE);
-        onboard_led(ONBOARD_LED_OFF);
+        onboard_led(ONBOARD_LED_FLOAT);
 }
 
 static void
@@ -249,6 +249,23 @@ init_serial(int config)
 {
         cdc_init(serial_in, NULL, &cdc);
         cdc_set_stdout(&cdc);
+        dfu_app_init(sys_reset_to_loader);
+}
+
+void
+suspend_sys(void)
+{
+        /* XXX check if print job is running */
+        disable_pins();
+
+        SMC.pmctrl.stopm = STOPM_VLPS;
+        SCB.scr.sleepdeep = 1;
+}
+
+void
+resume_sys(void)
+{
+        SCB.scr.sleepdeep = 0;
 }
 
 
@@ -257,6 +274,7 @@ static void
 power_down_cb(void *cbdata)
 {
         crit_enter();
+
         disable_pins();
 
         /* PTD6 is P15, which is wupe3 in wupe[3], and bit 7 in wuf2 */
@@ -267,7 +285,6 @@ power_down_cb(void *cbdata)
         LLWU.wupe[3].wupe3 = LLWU_PE_RISING;
 
         /* set up VLLS0 */
-        SMC.pmprot.avlls = 1;
         SMC.pmctrl.stopm = STOPM_VLLS;
         SMC.vllsctrl.porpo = 0;
         SMC.vllsctrl.vllsm = VLLSM_VLLS0;
@@ -292,6 +309,20 @@ PIN_DEFINE_CALLBACK(PIN_PTD6, PIN_CHANGE_ZERO, power_down_cb, NULL);
 int
 main(void)
 {
+        /* we want to go into VLLS and VLPS modes */
+        SMC.pmprot.raw = ((struct SMC_PMPROT) { .avlls = 1, .avlp = 1 }).raw;
+
+        /* Disable the JTAG/SWD pins */
+        pin_mode(PIN_PTA0, PIN_MODE_MUX_ANALOG);
+        pin_mode(PIN_PTA1, PIN_MODE_MUX_ANALOG);
+        pin_mode(PIN_PTA2, PIN_MODE_MUX_ANALOG);
+        pin_mode(PIN_PTA3, PIN_MODE_MUX_ANALOG);
+        pin_mode(PIN_PTA4, PIN_MODE_MUX_ANALOG);
+        SIM.scgc5.porta = 0;
+
+        /* disable USB regulator */
+        SIM.sopt1.usbregen = 0;
+
         /* return from VLLS0 */
         gpio_dir(PIN_VUSB_SENSE, GPIO_INPUT);
         PMC.regsc.ackiso = 1;
@@ -300,5 +331,6 @@ main(void)
         spi_init();
         pit_init();
         usb_init(&cdc_device);
+
         sys_yield_for_frogs();
 }
